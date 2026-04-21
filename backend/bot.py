@@ -136,7 +136,8 @@ class TigerCog(commands.Cog):
             ),
         )
         embed.set_footer(text=f"Polling every {self.bot.poll_interval}s for up to {self.bot.poll_timeout//60} min.")
-        await send(embed=embed)
+        view = OrderView(self.bot.db, activation_id, timeout=self.bot.poll_timeout + 600)
+        await send(embed=embed, view=view)
 
         # Poll for code in background so command returns immediately.
         asyncio.create_task(self._poll_for_code(send, activation_id, phone, service, country))
