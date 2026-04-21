@@ -17,6 +17,41 @@ from tiger_data import POPULAR_COUNTRIES, POPULAR_SERVICES, country_name, servic
 log = logging.getLogger("tigerbot")
 
 
+class OrderView(discord.ui.View):
+    """Buttons attached to a buy/code embed that reveal the activation_id
+    or the SMS code (ephemerally) when clicked — so the user can copy them."""
+
+    def __init__(self, db, activation_id: str, timeout: float = 1800.0) -> None:
+        super().__init__(timeout=timeout)
+        self._db = db
+        self._activation_id = activation_id
+
+    @discord.ui.button(label="Copy Code", style=discord.ButtonStyle.primary, emoji="🔑")
+    async def copy_code(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        doc = await self._db.tiger_orders.find_one(
+            {"activation_id": self._activation_id}, {"_id": 0}
+        )
+        code = (doc or {}).get("code")
+        if code:
+            await interaction.response.send_message(
+                f"**SMS code** (tap/triple-click to copy):\n```{code}```",
+                ephemeral=True,
+            )
+        else:
+            status = (doc or {}).get("status", "UNKNOWN")
+            await interaction.response.send_message(
+                f":hourglass: No code yet — current status: `{status}`.",
+                ephemeral=True,
+            )
+
+    @discord.ui.button(label="Copy Activation ID", style=discord.ButtonStyle.secondary, emoji="🆔")
+    async def copy_activation(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.send_message(
+            f"**Activation ID** (tap/triple-click to copy):\n```{self._activation_id}```",
+            ephemeral=True,
+        )
+
+
 def _get_env(name: str, default: Optional[str] = None) -> str:
     v = os.environ.get(name, default)
     if v is None:
@@ -138,7 +173,8 @@ class TigerCog(commands.Cog):
                         f"**Activation ID:** `{activation_id}`"
                     ),
                 )
-                await send(embed=embed)
+                view = OrderView(self.bot.db, activation_id, timeout=1800)
+                await send(embed=embed, view=view)
                 return
             if status == "ACCESS_CANCEL":
                 await self._update(activation_id, {"status": "CANCELLED"})
