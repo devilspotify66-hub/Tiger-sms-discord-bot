@@ -33,10 +33,7 @@ class OrderView(discord.ui.View):
         )
         code = (doc or {}).get("code")
         if code:
-            await interaction.response.send_message(
-                f"**SMS code** (tap/triple-click to copy):\n```{code}```",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(str(code), ephemeral=True)
         else:
             status = (doc or {}).get("status", "UNKNOWN")
             await interaction.response.send_message(
@@ -46,10 +43,7 @@ class OrderView(discord.ui.View):
 
     @discord.ui.button(label="Copy Activation ID", style=discord.ButtonStyle.secondary, emoji="🆔")
     async def copy_activation(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        await interaction.response.send_message(
-            f"**Activation ID** (tap/triple-click to copy):\n```{self._activation_id}```",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(self._activation_id, ephemeral=True)
 
 
 def _get_env(name: str, default: Optional[str] = None) -> str:
