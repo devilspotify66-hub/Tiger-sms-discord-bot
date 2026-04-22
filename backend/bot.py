@@ -16,6 +16,33 @@ from tiger_data import POPULAR_COUNTRIES, POPULAR_SERVICES, country_name, servic
 
 log = logging.getLogger("tigerbot")
 
+# ---------------- Brand / embed theme ----------------
+BRAND_NAME = "Tiger SMS"
+BRAND_ICON = "https://tiger-sms.com/favicon-32x32.png"
+
+C_ORANGE = 0xF97316   # purchased / primary brand
+C_GREEN = 0x22C55E    # success (code received)
+C_AMBER = 0xFBBF24    # balance / info
+C_RED = 0xEF4444      # errors / cancelled
+C_SLATE = 0x64748B    # neutral info
+C_INDIGO = 0x6366F1   # services list
+C_TEAL = 0x14B8A6     # countries list
+
+
+def _brand(embed: discord.Embed, footer: str | None = None) -> discord.Embed:
+    embed.set_author(name=BRAND_NAME, icon_url=BRAND_ICON)
+    embed.timestamp = datetime.now(timezone.utc)
+    if footer:
+        embed.set_footer(text=footer, icon_url=BRAND_ICON)
+    else:
+        embed.set_footer(text="tiger-sms.com", icon_url=BRAND_ICON)
+    return embed
+
+
+def _error_embed(message: str, title: str = "Something went wrong") -> discord.Embed:
+    e = discord.Embed(title=title, description=message, colour=C_RED)
+    return _brand(e)
+
 
 class OrderView(discord.ui.View):
     """Buttons attached to a buy/code embed that reveal the activation_id
@@ -101,10 +128,10 @@ class TigerCog(commands.Cog):
         try:
             activation_id, phone = await self.bot.tiger.get_number(service, country)
         except TigerSMSError as e:
-            await send(f":x: tiger-sms error: `{e}`")
+            await send(embed=_error_embed(f"tiger-sms error: `{e}`", "Purchase failed"))
             return
         except Exception as e:
-            await send(f":x: Request failed: `{e}`")
+            await send(embed=_error_embed(f"Request failed: `{e}`", "Purchase failed"))
             return
 
         created = datetime.now(timezone.utc).isoformat()
@@ -120,16 +147,19 @@ class TigerCog(commands.Cog):
         })
 
         embed = discord.Embed(
-            title="Number purchased",
-            colour=0x2ECC71,
-            description=(
-                f"**Service:** {service_name(service)} (`{service}`)\n"
-                f"**Country:** {country_name(country)} (`{country}`)\n"
-                f"**Phone:** `+{phone}`\n"
-                f"**Activation ID:** `{activation_id}`"
-            ),
+            title="🐯  Number purchased",
+            description=f"Waiting for an SMS on `+{phone}`…",
+            colour=C_ORANGE,
         )
-        embed.set_footer(text=f"Polling every {self.bot.poll_interval}s for up to {self.bot.poll_timeout//60} min.")
+        embed.add_field(name="Service", value=f"{service_name(service)}\n`{service}`", inline=True)
+        embed.add_field(name="Country", value=f"{country_name(country)}\n`{country}`", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)  # spacer for clean 2+1 grid
+        embed.add_field(name="Phone number", value=f"```+{phone}```", inline=False)
+        embed.add_field(name="Activation ID", value=f"`{activation_id}`", inline=False)
+        _brand(
+            embed,
+            footer=f"Polling every {self.bot.poll_interval}s • up to {self.bot.poll_timeout//60} min",
+        )
         view = OrderView(self.bot.db, activation_id, timeout=self.bot.poll_timeout + 600)
         await send(embed=embed, view=view)
 
@@ -144,7 +174,10 @@ class TigerCog(commands.Cog):
                 status, code = await self.bot.tiger.get_status(activation_id)
             except TigerSMSError as e:
                 await self._update(activation_id, {"status": "ERROR", "error": str(e)})
-                await send(f":warning: Status error for `{activation_id}`: `{e}`")
+                await send(embed=_error_embed(
+                    f"Status check failed for `{activation_id}`\n`{e}`",
+                    "Status error",
+                ))
                 return
             except Exception as e:
                 log.warning("poll error: %s", e)
@@ -158,30 +191,42 @@ class TigerCog(commands.Cog):
                 except Exception:
                     pass
                 embed = discord.Embed(
-                    title="SMS code received",
-                    colour=0x3498DB,
-                    description=(
-                        f"**Phone:** `+{phone}`\n"
-                        f"**Service:** {service_name(service)} (`{service}`)\n"
-                        f"**Country:** {country_name(country)} (`{country}`)\n"
-                        f"**Code:** ```{code}```\n"
-                        f"**Activation ID:** `{activation_id}`"
-                    ),
+                    title="✅  SMS code received",
+                    description=f"Code for `+{phone}`",
+                    colour=C_GREEN,
                 )
+                embed.add_field(name="Code", value=f"```\n{code}\n```", inline=False)
+                embed.add_field(name="Service", value=f"{service_name(service)}\n`{service}`", inline=True)
+                embed.add_field(name="Country", value=f"{country_name(country)}\n`{country}`", inline=True)
+                embed.add_field(name="\u200b", value="\u200b", inline=True)
+                embed.add_field(name="Activation ID", value=f"`{activation_id}`", inline=False)
+                _brand(embed, footer="Activation completed")
                 view = OrderView(self.bot.db, activation_id, timeout=1800)
                 await send(embed=embed, view=view)
                 return
             if status == "ACCESS_CANCEL":
                 await self._update(activation_id, {"status": "CANCELLED"})
-                await send(f":no_entry: Activation `{activation_id}` was cancelled.")
+                cancel_embed = discord.Embed(
+                    title="⛔  Activation cancelled",
+                    description=f"Activation `{activation_id}` was cancelled.",
+                    colour=C_RED,
+                )
+                _brand(cancel_embed)
+                await send(embed=cancel_embed)
                 return
             # else STATUS_WAIT_CODE / STATUS_WAIT_RETRY — keep polling
 
         await self._update(activation_id, {"status": "TIMEOUT"})
-        await send(
-            f":alarm_clock: No SMS received within {self.bot.poll_timeout//60} min for `{activation_id}`. "
-            f"Use `/cancel {activation_id}` to free the balance."
+        to_embed = discord.Embed(
+            title="⏰  SMS timeout",
+            description=(
+                f"No SMS received within **{self.bot.poll_timeout//60} min** for "
+                f"`{activation_id}`.\nUse `/cancel {activation_id}` to free the balance."
+            ),
+            colour=C_SLATE,
         )
+        _brand(to_embed)
+        await send(embed=to_embed)
 
     # ---------------- /buy and !buy ----------------
     @commands.hybrid_command(name="buy", description="Buy a phone number from tiger-sms and await the SMS code.")
@@ -201,12 +246,23 @@ class TigerCog(commands.Cog):
         try:
             st, code = await self.bot.tiger.get_status(activation_id)
         except TigerSMSError as e:
-            await ctx.send(f":x: tiger-sms error: `{e}`")
+            await ctx.send(embed=_error_embed(f"tiger-sms error: `{e}`", "Status check failed"))
             return
-        msg = f"**Activation `{activation_id}`** — status: `{st}`"
+
+        pretty = {
+            "STATUS_OK": ("✅ Code received", C_GREEN),
+            "STATUS_WAIT_CODE": ("⏳ Waiting for SMS", C_AMBER),
+            "STATUS_WAIT_RETRY": ("🔁 Waiting for retry SMS", C_AMBER),
+            "ACCESS_CANCEL": ("⛔ Cancelled", C_RED),
+        }.get(st, (f"ℹ️ {st}", C_SLATE))
+
+        embed = discord.Embed(title=pretty[0], colour=pretty[1])
+        embed.add_field(name="Activation ID", value=f"`{activation_id}`", inline=False)
+        embed.add_field(name="Raw status", value=f"`{st}`", inline=True)
         if code:
-            msg += f"\n**Code:** ```{code}```"
-        await ctx.send(msg)
+            embed.add_field(name="Code", value=f"```\n{code}\n```", inline=False)
+        _brand(embed)
+        await ctx.send(embed=embed)
 
     # ---------------- /cancel ----------------
     @commands.hybrid_command(name="cancel", description="Cancel an activation and refund the balance.")
@@ -216,10 +272,18 @@ class TigerCog(commands.Cog):
         try:
             res = await self.bot.tiger.set_status(activation_id, 8)
         except TigerSMSError as e:
-            await ctx.send(f":x: tiger-sms error: `{e}`")
+            await ctx.send(embed=_error_embed(f"tiger-sms error: `{e}`", "Cancel failed"))
             return
         await self._update(activation_id, {"status": "CANCELLED"})
-        await ctx.send(f":white_check_mark: Cancelled `{activation_id}` — response: `{res}`")
+        embed = discord.Embed(
+            title="⛔  Activation cancelled",
+            description="The number has been released and your balance refunded.",
+            colour=C_RED,
+        )
+        embed.add_field(name="Activation ID", value=f"`{activation_id}`", inline=False)
+        embed.add_field(name="API response", value=f"`{res}`", inline=False)
+        _brand(embed)
+        await ctx.send(embed=embed)
 
     # ---------------- /balance ----------------
     @commands.hybrid_command(name="balance", description="Show your tiger-sms account balance.")
@@ -228,48 +292,80 @@ class TigerCog(commands.Cog):
         try:
             bal = await self.bot.tiger.get_balance()
         except TigerSMSError as e:
-            await ctx.send(f":x: tiger-sms error: `{e}`")
+            await ctx.send(embed=_error_embed(f"tiger-sms error: `{e}`", "Balance lookup failed"))
             return
-        await ctx.send(f":moneybag: **Balance:** `{bal}` RUB")
+        embed = discord.Embed(title="💰  tiger-sms balance", colour=C_AMBER)
+        embed.add_field(name="Available", value=f"**₽ {bal:.2f}** RUB", inline=False)
+        _brand(embed, footer="Top up at tiger-sms.com")
+        await ctx.send(embed=embed)
 
     # ---------------- /services ----------------
     @commands.hybrid_command(name="services", description="List popular service codes.")
     async def services(self, ctx: commands.Context) -> None:
-        lines = [f"`{c}` — {n}" for c, n in POPULAR_SERVICES.items()]
+        items = list(POPULAR_SERVICES.items())
+        half = (len(items) + 1) // 2
+        col1 = "\n".join(f"`{c:<3}` · {n}" for c, n in items[:half])
+        col2 = "\n".join(f"`{c:<3}` · {n}" for c, n in items[half:])
         embed = discord.Embed(
-            title="Popular services",
-            description="\n".join(lines),
-            colour=0x9B59B6,
+            title="📋  Popular services",
+            description="Use the code with `/buy service:<code>`.",
+            colour=C_INDIGO,
         )
-        embed.set_footer(text="Full list: https://tiger-sms.com/api#services")
+        embed.add_field(name="\u200b", value=col1 or "\u200b", inline=True)
+        embed.add_field(name="\u200b", value=col2 or "\u200b", inline=True)
+        _brand(embed, footer="Full catalog: tiger-sms.com/api")
         await ctx.send(embed=embed)
 
     # ---------------- /countries ----------------
     @commands.hybrid_command(name="countries", description="List popular country IDs.")
     async def countries(self, ctx: commands.Context) -> None:
-        lines = [f"`{c}` — {n}" for c, n in POPULAR_COUNTRIES.items()]
+        items = list(POPULAR_COUNTRIES.items())
+        half = (len(items) + 1) // 2
+        col1 = "\n".join(f"`{c:>3}` · {n}" for c, n in items[:half])
+        col2 = "\n".join(f"`{c:>3}` · {n}" for c, n in items[half:])
         embed = discord.Embed(
-            title="Popular countries",
-            description="\n".join(lines),
-            colour=0xE67E22,
+            title="🌍  Popular countries",
+            description="Use the ID with `/buy service:<code> country:<id>`.",
+            colour=C_TEAL,
         )
-        embed.set_footer(text="Full list: https://tiger-sms.com/api#countries")
+        embed.add_field(name="\u200b", value=col1 or "\u200b", inline=True)
+        embed.add_field(name="\u200b", value=col2 or "\u200b", inline=True)
+        _brand(embed, footer="Full catalog: tiger-sms.com/api")
         await ctx.send(embed=embed)
 
     # ---------------- /help ----------------
     @commands.hybrid_command(name="tigerhelp", description="Show available tiger-sms bot commands.")
     async def tigerhelp(self, ctx: commands.Context) -> None:
-        txt = (
-            "**Tiger-SMS Discord Bot — commands**\n"
-            "`/buy service [country]` — purchase a number & await SMS code\n"
-            "`/status <activation_id>` — check status of an activation\n"
-            "`/cancel <activation_id>` — cancel an activation (refund)\n"
-            "`/balance` — show tiger-sms balance\n"
-            "`/services` — list popular service codes\n"
-            "`/countries` — list popular country IDs\n"
-            "Prefix alternative: `!buy`, `!status`, `!cancel`, `!balance`, `!services`, `!countries`"
+        embed = discord.Embed(
+            title="🐯  Tiger SMS Bot",
+            description="Buy virtual phone numbers from tiger-sms.com and receive SMS codes right here.",
+            colour=C_ORANGE,
         )
-        await ctx.send(txt)
+        embed.add_field(
+            name="Main commands",
+            value=(
+                "`/buy service [country]` — buy a number & auto-receive the code\n"
+                "`/status <activation_id>` — check status of an activation\n"
+                "`/cancel <activation_id>` — cancel & refund"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Info",
+            value=(
+                "`/balance` — show tiger-sms balance\n"
+                "`/services` — popular service codes\n"
+                "`/countries` — popular country IDs"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Prefix alternatives",
+            value="`!buy`, `!status`, `!cancel`, `!balance`, `!services`, `!countries`",
+            inline=False,
+        )
+        _brand(embed)
+        await ctx.send(embed=embed)
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
