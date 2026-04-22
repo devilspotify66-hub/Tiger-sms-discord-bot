@@ -1,3 +1,4 @@
+print("🔥 FILE STARTED")
 from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
